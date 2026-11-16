@@ -8,13 +8,12 @@ import {
 
 @Entity({ name: 'webhook_events' })
 export class WebhookEvent {
-  @PrimaryGeneratedColumn('uuid')
-  id: string;
+  @PrimaryGeneratedColumn()
+  id: number;
 
-  // Unique event ID from payment gateway or webhook payload
   @Index({ unique: true })
   @Column({ type: 'varchar', length: 150 })
-  eventId: string;
+  eventId: string; // Idempotency token for webhook: ensures duplicate webhook calls don't re-run
 
   @Column({ type: 'varchar', length: 100 })
   provider: string; // e.g., 'PHONEPE'
@@ -28,4 +27,3 @@ export class WebhookEvent {
   @CreateDateColumn()
   receivedAt: Date;
 }
-

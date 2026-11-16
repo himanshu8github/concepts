@@ -1,123 +1,265 @@
-# Core Concepts Guide: Idempotency, Rate Limiting, Race Conditions & Webhooks
+# Complete E-Commerce Architecture Guide: Idempotency, Race Conditions, Rate Limiting & Webhooks
 
-## 1. What is Idempotency & Why is it needed?
-An operation is **idempotent** if applying it multiple times produces the **exact same result** without unintended side effects.
+## 1. Concepts Deep Dive
 
-- **HTTP GET / PUT / DELETE**: Naturally idempotent. (Requesting or deleting an entity multiple times leaves the system in the same final state).
-- **HTTP POST**: **NOT** idempotent by default. If a user clicks *"Pay Now"* or *"Place Order"* twice, or if a network timeout causes the client to retry, the server could create duplicate orders or deduct money twice!
+### A. What is Idempotency & Why is it needed?
+An HTTP request is **idempotent** if making the same request multiple times has the **exact same result** as making it once.
+- `GET`, `PUT`, `DELETE` are inherently idempotent.
+- `POST` is **non-idempotent**. If a customer clicks *"Place Order"* twice, or their mobile network hiccups and the app retries, 2 separate orders would be created and the customer would be charged twice without an idempotency mechanism.
 
-### How Idempotency Keys Work
-1. The client generates a unique UUID (e.g. `Idempotency-Key: e41b714f-6d4b-4f91-88c9-0c671755a589`) and passes it in the HTTP request headers.
-2. The server receives the request and checks the database:
-   - **First Request**: Key does not exist. An entry is saved with status `STARTED`. The order is created and saved. Status is updated to `COMPLETED` along with the response body.
-   - **Concurrent Request (Same time)**: Returns `409 Conflict` (request already processing).
-   - **Retried Request (Network drop / User refresh)**: Key is found with status `COMPLETED`. The server immediately returns the **cached response body** without re-executing order creation or charging the card again!
-   - **Key Re-use with Different Payload**: If the client sends the same key but different order data, it throws `400 Bad Request`.
+#### How the Idempotency Key is Generated & Works:
+1. **Client Generation**: The client creates a random unique UUID v4 (e.g. `uuidv4()` in JavaScript or `$randomUUID` in Postman):
+   ```http
+   Idempotency-Key: e41b714f-6d4b-4f91-88c9-0c671755a589
+   ```
+2. **Server Execution Flow (`idempotency.interceptor.ts`)**:
+   - Takes `Idempotency-Key` + endpoint path + SHA-256 hash of the request body.
+   - **First Call**: Saves row into `idempotency_keys` table with status `STARTED`. Executes the order creation. When complete, saves the HTTP status code (e.g. `201`) and response JSON, updating status to `COMPLETED`.
+   - **Second Call (Exact duplicate retry)**: Detects key with `COMPLETED`. Directly replays the **cached response body** with header `X-Cache-Lookup: HIT - Replayed Idempotent Response`. **No duplicate order is saved, and no second charge happens!**
+   - **Concurrent Call (Parallel spam)**: Returns `409 Conflict` (request currently in progress).
+   - **Mismatched Payload**: If same key is reused for a different product/amount, it rejects with `400 Bad Request`.
 
 ---
 
-## 2. Race Conditions & Prevention
-A **race condition** occurs when two concurrent requests try to read and update the same record at the same time.
+### B. What is a Race Condition & How do we fix it?
+A **race condition** happens when multiple concurrent processes read and modify shared state simultaneously, resulting in inconsistent data.
 
-**Example without lock:**
-1. Request A reads `Order #100 (Status: PENDING)`
-2. Request B reads `Order #100 (Status: PENDING)`
-3. Request A updates balance and marks `PAID`
-4. Request B updates balance and marks `PAID` -> **Double processing!**
+#### The Classic E-Commerce Problem:
+Suppose product *Sony WH-1000XM4* has **`stock = 1`**.
+- User A and User B click "Buy" at the exact same millisecond.
+- Thread A checks: `stock >= 1` (True, stock is 1).
+- Thread B checks: `stock >= 1` (True, stock is still 1).
+- Thread A creates order and sets `stock = 0`.
+- Thread B creates order and sets `stock = -1`.
+- **Result**: Oversold item! You sold 2 units when you only had 1 in inventory.
 
-**Solution implemented:**
-- **Pessimistic Locking (`SELECT FOR UPDATE`)**: In `order.service.ts`:
-  ```typescript
-  manager.getRepository(Order)
-    .createQueryBuilder('order')
-    .setLock('pessimistic_write') // Locks row at DB level
-    .where('order.transactionId = :transactionId', { transactionId })
-    .getOne();
+#### Our Fix: Pessimistic Row Locking (`SELECT ... FOR UPDATE`)
+In [order.service.ts](file:///c:/Users/surface/Desktop/concepts/idompotent/src/modules/order/order.service.ts):
+```typescript
+const product = await manager
+  .getRepository(Product)
+  .createQueryBuilder('product')
+  .setLock('pessimistic_write') // Row level lock!
+  .where('product.id = :id', { id: dto.productId })
+  .getOne();
+```
+- When Thread A acquires `pessimistic_write`, MySQL locks that single product row.
+- Thread B is forced to pause and wait until Thread A completes its transaction.
+- When Thread B unlocks, it re-reads `stock = 0` and throws `400 Bad Request: Insufficient stock`.
+
+---
+
+### C. Rate Limiting
+Protects endpoints from denial of service (DoS), bot scalping, and brute-force hammering.
+- Configured using `@nestjs/throttler`:
+  - **Global**: 60 requests per 60 seconds per IP.
+  - **Checkout / Order creation**: Restricted to **5 requests per minute** per IP (`@Throttle({ default: { limit: 5, ttl: 60000 } })`).
+- If exceeded, server immediately halts execution with `429 Too Many Requests`.
+
+---
+
+### D. Webhooks & Signatures (PhonePe Gateway)
+A **webhook** is a reverse-API call where PhonePe notifies your backend when the customer finishes paying in UPI/Card.
+
+#### Security & Consistency in Webhooks:
+1. **Tampering / Spoofing Protection (Checksum Signature)**:
+   - PhonePe sends an `X-VERIFY` header generated as:
+     $$\text{SHA256}(\text{base64Payload} + \text{saltKey}) + \text{"\#\#\#"} + \text{saltIndex}$$
+   - Your server computes the exact same hash using its secret `PHONEPE_SALT_KEY`. If someone attempts to forge a webhook, the signature fails with `401 Unauthorized`.
+2. **Duplicate Webhook Delivery**:
+   - PhonePe guarantees *at-least-once* delivery. If network is slow, PhonePe will send the same webhook 2 or 3 times.
+   - We store an `eventId` in `webhook_events` with a `UNIQUE` index constraint. If the same webhook arrives again, it skips processing safely.
+
+---
+
+## 2. All API Endpoints & Testing Walkthrough
+
+Base URL: `http://localhost:3000`
+
+### 1. View Products (Auto-Seeded)
+- **Method**: `GET`
+- **URL**: `http://localhost:3000/products`
+- **Response**:
+  ```json
+  {
+    "success": true,
+    "count": 4,
+    "data": [
+      {
+        "id": 1,
+        "name": "boAt Airdopes 141 Bluetooth Truly Wireless in Ear Earbuds",
+        "sku": "BOAT-AIR-141",
+        "mrp": "4490.00",
+        "sellingPrice": "1299.00",
+        "stock": 10
+      },
+      {
+        "id": 2,
+        "name": "Sony WH-1000XM4 Noise Cancelling Wireless Headphones",
+        "sku": "SONY-WH-XM4",
+        "mrp": "29990.00",
+        "sellingPrice": "19990.00",
+        "stock": 5
+      },
+      {
+        "id": 3,
+        "name": "boAt Wave Call Smartwatch with Bluetooth Calling",
+        "sku": "BOAT-WAVE-CALL",
+        "mrp": "7990.00",
+        "sellingPrice": "1799.00",
+        "stock": 15
+      },
+      {
+        "id": 4,
+        "name": "Noise ColorFit Pro 4 Advanced Bluetooth Calling Smart Watch",
+        "sku": "NOISE-CFIT-PRO4",
+        "mrp": "5999.00",
+        "sellingPrice": "2499.00",
+        "stock": 8
+      }
+    ]
+  }
   ```
-  While Request A holds the lock, Request B waits until transaction A commits or rolls back.
-- **Unique DB Constraints**: Unique indices on `transactionId` and `(key, endpoint)` at the database level make duplicate inserts physically impossible.
 
 ---
 
-## 3. Rate Limiting
-Prevents API abuse, brute-force attacks, and server exhaustion by limiting requests per IP within a time window.
-- Configured globally with `@nestjs/throttler`: `limit: 60 requests / 60 seconds`.
-- Tailored per endpoint (e.g., Order creation has `@Throttle({ default: { limit: 5, ttl: 60000 } })`).
+### 2. View Single Product Details
+- **Method**: `GET`
+- **URL**: `http://localhost:3000/products/1`
 
 ---
 
-## 4. Webhooks & Mock PhonePe Gateway
-A **Webhook** is an automated reverse HTTP call where PhonePe sends real-time payment status updates to your server.
-
-**Challenges & Solutions:**
-1. **Spoofed Webhooks**: Attacker sends fake `SUCCESS` callback.
-   - *Fix*: Checksum signature verification using PhonePe's algorithm `SHA256(payload + saltKey)###saltIndex`.
-2. **Repeated Webhooks**: PhonePe retries webhooks until it receives a 200 OK.
-   - *Fix*: `webhook_events` table stores `eventId` with a unique index. Duplicate deliveries are safely skipped.
-3. **Simultaneous Webhook & User Redirect**: Both can hit at the exact same millisecond.
-   - *Fix*: Handled by row-level DB lock and idempotent state check (`if status === PAID return`).
-
----
-
-## 5. API Testing Walkthrough
-
-### Step 1: Create an Order (Idempotent)
-- **POST** `http://localhost:3000/orders`
+### 3. Place Order (Idempotent + Stock Deduct + Row Lock)
+- **Method**: `POST`
+- **URL**: `http://localhost:3000/orders`
 - **Headers**:
   ```http
   Content-Type: application/json
-  Idempotency-Key: test-order-uuid-001
+  Idempotency-Key: a1b2c3d4-e5f6-7890-abcd-112233445566
   ```
 - **Body**:
   ```json
   {
-    "userId": "user_123",
-    "amount": 500
+    "userId": 1,
+    "productId": 1,
+    "quantity": 1
   }
   ```
-> *Test Idempotency*: Send this exact request again with the same `Idempotency-Key`. Notice you get back the exact same order with header `X-Cache-Lookup: HIT - Replayed Idempotent Response`. No duplicate row is added to the database.
+- **Response**:
+  ```json
+  {
+    "success": true,
+    "message": "Order placed successfully. Please proceed to payment.",
+    "order": {
+      "id": 1,
+      "userId": 1,
+      "productId": 1,
+      "quantity": 1,
+      "amount": 1299,
+      "status": "PENDING",
+      "merchantTransactionId": "MT_1763285000000_A1B2C3D4"
+    }
+  }
+  ```
+> **Idempotency Experiment**: Send this request again with the exact same `Idempotency-Key`. Notice you get the response back immediately with response header `X-Cache-Lookup: HIT - Replayed Idempotent Response`. Stock is NOT deducted twice and no new order ID is created.
 
 ---
 
-### Step 2: Initiate Payment (PhonePe Payload & Checksum)
-- **POST** `http://localhost:3000/payments/initiate`
+### 4. Initiate PhonePe Payment Link
+- **Method**: `POST`
+- **URL**: `http://localhost:3000/payments/initiate`
+- **Headers**:
+  ```http
+  Content-Type: application/json
+  ```
 - **Body**:
   ```json
   {
-    "orderId": "<ORDER_ID_FROM_STEP_1>"
+    "orderId": 1
+  }
+  ```
+- **Response**:
+  ```json
+  {
+    "success": true,
+    "message": "PhonePe payment link generated successfully",
+    "orderId": 1,
+    "amount": "1299.00",
+    "merchantTransactionId": "MT_1763285000000_A1B2C3D4",
+    "paymentUrl": "https://api-preprod.phonepe.com/apis/pg-sandbox/pg/v1/pay?txn=MT_1763285000000_A1B2C3D4",
+    "phonePeHeaders": {
+      "Content-Type": "application/json",
+      "X-VERIFY": "f78a05c7...###1"
+    }
   }
   ```
 
 ---
 
-### Step 3: Test Webhook Idempotency & Signature
-1. Generate test payload and signature:
-   - **POST** `http://localhost:3000/payments/mock-generate-webhook-payload`
-   - **Body**:
-     ```json
-     {
-       "merchantTransactionId": "<TRANSACTION_ID_FROM_STEP_1>",
-       "status": "SUCCESS"
-     }
-     ```
-2. Trigger the PhonePe Webhook:
-   - **POST** `http://localhost:3000/payments/webhook`
-   - **Headers**:
-     ```http
-     Content-Type: application/json
-     X-VERIFY: <xVerifyHeader_FROM_STEP_3.1>
-     ```
-   - **Body**:
-     ```json
-     {
-       "response": "<response_FROM_STEP_3.1>"
-     }
-     ```
-3. *Test Webhook Idempotency*: Send the webhook request a second time. The server will detect duplicate event receipt and return:
-   ```json
-   {
-     "success": true,
-     "message": "Webhook event already processed (Idempotency check passed)."
-   }
-   ```
+### 5. Generate Mock Webhook Payload & Signature (Helper API)
+Use this endpoint to generate a verified PhonePe base64 webhook response and its authentic `X-VERIFY` header for testing:
+- **Method**: `POST`
+- **URL**: `http://localhost:3000/payments/mock-generate-webhook`
+- **Headers**:
+  ```http
+  Content-Type: application/json
+  ```
+- **Body**:
+  ```json
+  {
+    "merchantTransactionId": "MT_1763285000000_A1B2C3D4",
+    "status": "SUCCESS"
+  }
+  ```
+- **Response**:
+  ```json
+  {
+    "headers": {
+      "Content-Type": "application/json",
+      "X-VERIFY": "98a0b12e...###1"
+    },
+    "body": {
+      "response": "eyJzdWNjZXNzIjp0cnVlLCJjb2RlIjoiUEFZTUVOVF9TVUNDRVNTIi..."
+    }
+  }
+  ```
 
+---
+
+### 6. PhonePe Webhook Endpoint (Payment Confirmation)
+- **Method**: `POST`
+- **URL**: `http://localhost:3000/payments/webhook`
+- **Headers**:
+  ```http
+  Content-Type: application/json
+  X-VERIFY: <X-VERIFY value from Step 5>
+  ```
+- **Body**:
+  ```json
+  {
+    "response": "<response base64 string from Step 5>"
+  }
+  ```
+- **Response**:
+  ```json
+  {
+    "success": true,
+    "message": "Webhook executed. Order MT_1763285000000_A1B2C3D4 marked as PAID"
+  }
+  ```
+> **Webhook Idempotency Experiment**: Send this webhook a second time in Postman. Notice the response:
+> `"message": "Webhook duplicate delivery safely ignored (Idempotency check)."`
+
+---
+
+### 7. View Order History
+- **Method**: `GET`
+- **URL**: `http://localhost:3000/orders` (or filter by user: `http://localhost:3000/orders?userId=1`)
+- Shows user information, product SKU, payment status (`PAID`), and transaction reference.
+
+---
+
+### 8. View Payment History
+- **Method**: `GET`
+- **URL**: `http://localhost:3000/payments/history`
+- Displays all payments, transaction IDs, statuses (`SUCCESS`/`FAILED`), and gateway references.

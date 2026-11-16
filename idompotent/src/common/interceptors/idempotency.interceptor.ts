@@ -14,7 +14,7 @@ import * as crypto from 'crypto';
 import {
   IdempotencyKey,
   IdempotencyStatus,
-} from '../database/entities/idempotency-key.entity';
+} from '../../database/entities/idempotency-key.entity';
 
 @Injectable()
 export class IdempotencyInterceptor implements NestInterceptor {

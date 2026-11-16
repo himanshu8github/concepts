@@ -1,13 +1,18 @@
-import { IsNotEmpty, IsNumber, IsString, Min } from 'class-validator';
+import { IsInt, IsNotEmpty, IsPositive, Min } from 'class-validator';
 
-export class CreateOrderDto {
+export class PlaceOrderDto {
   @IsNotEmpty()
-  @IsString()
-  userId: string;
+  @IsInt()
+  @IsPositive()
+  userId: number;
 
   @IsNotEmpty()
-  @IsNumber()
+  @IsInt()
+  @IsPositive()
+  productId: number;
+
+  @IsNotEmpty()
+  @IsInt()
   @Min(1)
-  amount: number;
+  quantity: number;
 }
-

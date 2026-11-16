@@ -4,22 +4,26 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 
+import { User } from './database/entities/user.entity';
+import { Product } from './database/entities/product.entity';
 import { Order } from './database/entities/order.entity';
-import { IdempotencyKey } from './database/entities/idempotency-key.entity';
+import { Payment } from './database/entities/payment.entity';
 import { WebhookEvent } from './database/entities/webhook-event.entity';
+import { IdempotencyKey } from './database/entities/idempotency-key.entity';
 
+import { ProductModule } from './modules/product/product.module';
 import { OrderModule } from './modules/order/order.module';
 import { PaymentModule } from './modules/payment/payment.module';
 
 @Module({
   imports: [
-    // Global Configuration
+    // Global environment config
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
     }),
 
-    // Global Rate Limiting / Throttler (Default: 60 requests per 60 seconds per IP)
+    // Global Rate Limiting Throttler (Default: 60 requests per 60 seconds per IP)
     ThrottlerModule.forRoot([
       {
         ttl: 60000,
@@ -38,12 +42,20 @@ import { PaymentModule } from './modules/payment/payment.module';
         username: config.get<string>('DB_USERNAME', 'root'),
         password: config.get<string>('DB_PASSWORD', ''),
         database: config.get<string>('DB_DATABASE', 'idom'),
-        entities: [Order, IdempotencyKey, WebhookEvent],
-        synchronize: true, // Auto creates tables on startup
+        entities: [
+          User,
+          Product,
+          Order,
+          Payment,
+          WebhookEvent,
+          IdempotencyKey,
+        ],
+        synchronize: false, // Migrations manage database schema changes
         logging: ['error', 'warn'],
       }),
     }),
 
+    ProductModule,
     OrderModule,
     PaymentModule,
   ],
@@ -55,4 +67,3 @@ import { PaymentModule } from './modules/payment/payment.module';
   ],
 })
 export class AppModule {}
-

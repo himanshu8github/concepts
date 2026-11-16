@@ -1,14 +1,14 @@
-import { IsNotEmpty, IsString } from 'class-validator';
+import { IsInt, IsNotEmpty, IsPositive, IsString } from 'class-validator';
 
 export class InitiatePaymentDto {
   @IsNotEmpty()
-  @IsString()
-  orderId: string;
+  @IsInt()
+  @IsPositive()
+  orderId: number;
 }
 
 export class MockPhonePeWebhookDto {
   @IsNotEmpty()
   @IsString()
-  response: string; // Base64 encoded payload per PhonePe specification
+  response: string; // Base64 encoded payload following PhonePe standard
 }
-

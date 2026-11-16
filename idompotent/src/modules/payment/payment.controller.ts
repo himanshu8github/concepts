@@ -3,6 +3,7 @@ import {
   Post,
   Body,
   Headers,
+  Get,
   HttpCode,
   HttpStatus,
   BadRequestException,
@@ -16,18 +17,32 @@ export class PaymentController {
   constructor(private readonly paymentService: PaymentService) {}
 
   /**
-   * Endpoint to initiate payment with PhonePe
+   * 1. Initiate Dummy PhonePe Payment Link
    */
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('initiate')
   async initiatePayment(@Body() dto: InitiatePaymentDto) {
     return await this.paymentService.initiatePhonePePayment(dto.orderId);
   }
 
   /**
-   * PhonePe Webhook Endpoint
-   * Rate limited & Idempotent with signature verification
+   * 2. Payment History API
    */
-  @Throttle({ default: { limit: 20, ttl: 60000 } })
+  @Get('history')
+  async getPaymentHistory() {
+    const history = await this.paymentService.getPaymentHistory();
+    return {
+      success: true,
+      count: history.length,
+      data: history,
+    };
+  }
+
+  /**
+   * 3. PhonePe Webhook Endpoint:
+   * Handles payment confirmation securely with X-VERIFY signature verification and idempotency
+   */
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
   @Post('webhook')
   @HttpCode(HttpStatus.OK)
   async handleWebhook(
@@ -45,28 +60,28 @@ export class PaymentController {
   }
 
   /**
-   * Helper endpoint to simulate a mock PhonePe callback payload and its correct X-VERIFY header
-   * for testing in Postman/Curl
+   * 4. Helper API for Postman testing:
+   * Generates a realistic mock PhonePe webhook payload with the exact valid X-VERIFY checksum
    */
-  @Post('mock-generate-webhook-payload')
+  @Post('mock-generate-webhook')
   mockGenerateWebhook(
     @Body()
     body: {
       merchantTransactionId: string;
-      status: 'SUCCESS' | 'PAYMENT_ERROR';
+      status?: 'SUCCESS' | 'PAYMENT_ERROR';
     },
   ) {
     const mockData = {
       responseCode: body.status || 'SUCCESS',
-      code: 'PAYMENT_SUCCESS',
+      code: body.status === 'PAYMENT_ERROR' ? 'PAYMENT_ERROR' : 'PAYMENT_SUCCESS',
       message: 'Payment completed successfully',
       data: {
         merchantId: 'PGTESTPAYUAT',
         merchantTransactionId: body.merchantTransactionId,
-        transactionId: `PHONEPE_TXN_${Date.now()}`,
-        amount: 50000,
+        transactionId: `T${Date.now()}`,
+        amount: 129900,
         state: 'COMPLETED',
-        responseCode: 'SUCCESS',
+        responseCode: body.status || 'SUCCESS',
       },
     };
 
@@ -74,14 +89,15 @@ export class PaymentController {
     const xVerify = this.paymentService.generateChecksum(base64);
 
     return {
-      instructions:
-        'Copy "response" and "xVerifyHeader" to POST /payments/webhook to test the webhook idempotency',
+      guide: 'Copy this body and X-VERIFY header to test POST /payments/webhook in Postman',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-VERIFY': xVerify,
+      },
       body: {
         response: base64,
       },
-      xVerifyHeader: xVerify,
       decodedPayload: mockData,
     };
   }
 }
-

@@ -16,26 +16,21 @@ export enum IdempotencyStatus {
 @Entity({ name: 'idempotency_keys' })
 @Index(['key', 'endpoint'], { unique: true })
 export class IdempotencyKey {
-  @PrimaryGeneratedColumn('uuid')
-  id: string;
+  @PrimaryGeneratedColumn()
+  id: number;
 
-  // The client provided idempotent key (e.g., from header 'Idempotency-Key')
-  @Column({ type: 'varchar', length: 120 })
+  @Column({ type: 'varchar', length: 150 })
   key: string;
 
-  // Endpoint path for scope isolation
   @Column({ type: 'varchar', length: 255 })
   endpoint: string;
 
-  // Hash of the incoming request body to ensure exact match of request payloads
   @Column({ type: 'varchar', length: 64 })
   requestPayloadHash: string;
 
-  // Cached HTTP status code of the response
   @Column({ type: 'int', nullable: true })
   statusCode: number;
 
-  // Cached response body (JSON)
   @Column({ type: 'json', nullable: true })
   responseBody: any;
 
@@ -52,4 +47,3 @@ export class IdempotencyKey {
   @UpdateDateColumn()
   updatedAt: Date;
 }
-
