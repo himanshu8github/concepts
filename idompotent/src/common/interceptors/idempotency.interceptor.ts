@@ -30,26 +30,34 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const req = context.switchToHttp().getRequest();
     const res = context.switchToHttp().getResponse();
 
-    // 1. Extract Idempotency-Key from headers
+    // 1. Extract Idempotency-Key from headers (MANDATORY)
     const rawKey =
       req.headers['idempotency-key'] || req.headers['x-idempotency-key'];
 
-    // If no key is provided, proceed normally without idempotency caching
+    // Reject request if Idempotency-Key is missing
     if (!rawKey) {
-      return next.handle();
+      throw new BadRequestException(
+        'Missing mandatory Idempotency-Key header.',
+      );
     }
 
     const key = Array.isArray(rawKey) ? rawKey[0] : rawKey;
     const endpoint = req.originalUrl || req.url;
 
     // 2. Resolve Authenticated User ID:
-    // MUST come from server-authenticated context (req.user.id / session).
-    // Falls back to req.body.userId or 'anonymous' if public/demo.
+    // Priority:
+    // 1) Authenticated context: req.user.id
+    // 2) Client header: req.headers['x-user-id']
+    // 3) Request body: req.body.userId
+    // 4) Fallback: 'anonymous'
+    const headerUserId = req.headers['x-user-id'];
     const userId = req.user?.id
       ? String(req.user.id)
-      : req.body?.userId
-        ? String(req.body.userId)
-        : 'anonymous';
+      : headerUserId
+        ? String(Array.isArray(headerUserId) ? headerUserId[0] : headerUserId)
+        : req.body?.userId
+          ? String(req.body.userId)
+          : 'anonymous';
 
     // 3. Hash request payload (SHA-256) to ensure exact body matching
     const payloadHash = crypto

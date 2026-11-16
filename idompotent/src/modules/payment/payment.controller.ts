@@ -7,10 +7,12 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  UseInterceptors,
 } from '@nestjs/common';
 import { PaymentService } from './payment.service';
 import { InitiatePaymentDto, MockPhonePeWebhookDto } from './dto/payment.dto';
 import { Throttle } from '@nestjs/throttler';
+import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 
 @Controller('payments')
 export class PaymentController {
@@ -18,8 +20,10 @@ export class PaymentController {
 
   /**
    * 1. Initiate Dummy PhonePe Payment Link
+   * Idempotent: protected with Idempotency-Key header to prevent duplicate payment session creation
    */
   @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @UseInterceptors(IdempotencyInterceptor)
   @Post('initiate')
   async initiatePayment(@Body() dto: InitiatePaymentDto) {
     return await this.paymentService.initiatePhonePePayment(dto.orderId);
