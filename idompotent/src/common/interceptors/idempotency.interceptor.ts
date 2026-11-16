@@ -31,7 +31,8 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const res = context.switchToHttp().getResponse();
 
     // 1. Extract Idempotency-Key from headers
-    const rawKey = req.headers['idempotency-key'] || req.headers['x-idempotency-key'];
+    const rawKey =
+      req.headers['idempotency-key'] || req.headers['x-idempotency-key'];
 
     // If no key is provided, proceed normally without idempotency caching
     if (!rawKey) {
@@ -41,60 +42,70 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const key = Array.isArray(rawKey) ? rawKey[0] : rawKey;
     const endpoint = req.originalUrl || req.url;
 
-    // 2. Hash request payload to detect mismatch (client reusing key with different payload)
+    // 2. Resolve Authenticated User ID:
+    // MUST come from server-authenticated context (req.user.id / session).
+    // Falls back to req.body.userId or 'anonymous' if public/demo.
+    const userId = req.user?.id
+      ? String(req.user.id)
+      : req.body?.userId
+        ? String(req.body.userId)
+        : 'anonymous';
+
+    // 3. Hash request payload (SHA-256) to ensure exact body matching
     const payloadHash = crypto
       .createHash('sha256')
       .update(JSON.stringify(req.body || {}))
       .digest('hex');
 
-    // 3. Check if key exists
+    // 4. Scoped Lookup: (userId, endpoint, key)
+    // Prevents cross-user collisions: User B's lookup can NEVER match User A's row!
     let record = await this.idempotencyRepo.findOne({
-      where: { key, endpoint },
+      where: { userId, endpoint, key },
     });
 
     if (record) {
-      // Validate payload hash
+      // Rule: Same user, same key, different body -> 400 Bad Request
       if (record.requestPayloadHash !== payloadHash) {
-        throw new BadRequestException(
-          'Idempotency-Key reuse detected with different payload parameters!',
-        );
+        throw new BadRequestException('Invalid request parameters');
       }
 
       // If already COMPLETED: replay the exact cached response (Pure Idempotency)
       if (record.status === IdempotencyStatus.COMPLETED) {
-        res.status(record.statusCode);
+        res.status(record.statusCode || 200);
         res.setHeader('X-Cache-Lookup', 'HIT - Replayed Idempotent Response');
         return of(record.responseBody);
       }
 
-      // If still STARTED: another concurrent request is already running
+      // If still STARTED: another concurrent request is currently in-flight
+      // Returns generic message without leaking sensitive system details
       if (record.status === IdempotencyStatus.STARTED) {
         throw new ConflictException(
-          'A request with this Idempotency-Key is currently being processed. Please wait.',
+          'Request currently in progress. Please retry shortly.',
         );
       }
     }
 
-    // 4. Create initial record atomically with status STARTED
+    // 5. Atomically insert row with status STARTED scoped to (userId, endpoint, key)
     try {
       record = this.idempotencyRepo.create({
-        key,
+        userId,
         endpoint,
+        key,
         requestPayloadHash: payloadHash,
         status: IdempotencyStatus.STARTED,
       });
       record = await this.idempotencyRepo.save(record);
     } catch (err) {
-      // Handles race condition where two requests hit at exact same millisecond
+      // Handles concurrent race conditions hitting at the exact same millisecond
       if (err.code === 'ER_DUP_ENTRY' || err.message?.includes('duplicate')) {
         throw new ConflictException(
-          'Concurrent request with the same Idempotency-Key detected!',
+          'Request currently in progress. Please retry shortly.',
         );
       }
       throw err;
     }
 
-    // 5. On successful response, save cached response & mark COMPLETED
+    // 6. On success: cache response and mark COMPLETED. On failure: mark FAILED so client can retry.
     return next.handle().pipe(
       tap({
         next: async (responseBody) => {
@@ -105,7 +116,6 @@ export class IdempotencyInterceptor implements NestInterceptor {
           });
         },
         error: async () => {
-          // If request failed, mark as FAILED so client can retry with same key
           await this.idempotencyRepo.update(record.id, {
             status: IdempotencyStatus.FAILED,
           });
@@ -114,4 +124,3 @@ export class IdempotencyInterceptor implements NestInterceptor {
     );
   }
 }
-

@@ -4,7 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
-  Index,
+  Unique,
 } from 'typeorm';
 
 export enum IdempotencyStatus {
@@ -14,25 +14,26 @@ export enum IdempotencyStatus {
 }
 
 @Entity({ name: 'idempotency_keys' })
-@Index(['key', 'endpoint'], { unique: true })
+@Unique('uq_idem_user_endpoint_key', ['userId', 'endpoint', 'key'])
 export class IdempotencyKey {
-  @PrimaryGeneratedColumn()
-  id: number;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
-  @Column({ type: 'varchar', length: 150 })
-  key: string;
+  // Scoped to the authenticated user (e.g. from JWT req.user.id) to prevent cross-user key collisions
+  @Column({ type: 'varchar', length: 100 })
+  userId: string;
 
+  // Endpoint path for scope isolation
   @Column({ type: 'varchar', length: 255 })
   endpoint: string;
 
+  // The client provided idempotent key (e.g., from header 'Idempotency-Key')
+  @Column({ type: 'varchar', length: 128 })
+  key: string;
+
+  // Hash of the incoming request body to detect payload mismatches
   @Column({ type: 'varchar', length: 64 })
   requestPayloadHash: string;
-
-  @Column({ type: 'int', nullable: true })
-  statusCode: number;
-
-  @Column({ type: 'json', nullable: true })
-  responseBody: any;
 
   @Column({
     type: 'enum',
@@ -40,6 +41,14 @@ export class IdempotencyKey {
     default: IdempotencyStatus.STARTED,
   })
   status: IdempotencyStatus;
+
+  // Cached HTTP status code of the response
+  @Column({ type: 'int', nullable: true })
+  statusCode: number;
+
+  // Cached response body (JSON)
+  @Column({ type: 'json', nullable: true })
+  responseBody: any;
 
   @CreateDateColumn()
   createdAt: Date;

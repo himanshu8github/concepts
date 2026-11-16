@@ -1,11 +1,11 @@
 import { DataSource } from 'typeorm';
 import * as dotenv from 'dotenv';
-import { User } from './database/entities/user.entity';
-import { Product } from './database/entities/product.entity';
-import { Order } from './database/entities/order.entity';
-import { Payment } from './database/entities/payment.entity';
-import { WebhookEvent } from './database/entities/webhook-event.entity';
-import { IdempotencyKey } from './database/entities/idempotency-key.entity';
+import { User } from './entities/user.entity';
+import { Product } from './entities/product.entity';
+import { Order } from './entities/order.entity';
+import { Payment } from './entities/payment.entity';
+import { WebhookEvent } from './entities/webhook-event.entity';
+import { IdempotencyKey } from './entities/idempotency-key.entity';
 
 dotenv.config();
 
