@@ -21,6 +21,9 @@ export class User {
   })
   email: string;
 
+   @Prop({ default: 0 })
+  walletPoints: number; 
+
   @Prop({
     required: true,
     trim: true,

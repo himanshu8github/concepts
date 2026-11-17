@@ -1,126 +1,63 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+Part 1: ACID Properties in MongoDB
+In SQL, ACID is guaranteed by default for every transaction. In MongoDB, ACID is also guaranteed, but multi-document transactions were only introduced in version 4.0. Previously, MongoDB only guaranteed ACID for a single document.
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Here is how MongoDB handles ACID today:
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+1. Atomicity (All or Nothing)
+What it means: A transaction is treated as a single unit. Either all operations succeed, or none do. If any step fails, the database rolls back to the previous state.
 
-## Description
+SQL Example: Transferring $100 from Account A to B. You must deduct from A and add to B. If the server crashes after deducting from A, the whole transaction aborts, and A gets its money back.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+MongoDB Example: Placing an order (deducting wallet points and creating an order). If the points are deducted but the order creation fails, the transaction rolls back.
 
-## Project setup
+MongoDB Code: Uses session.startTransaction() and session.commitTransaction().
 
-```bash
-$ npm install
-```
+2. Consistency (Valid Data Only)
+What it means: Data written to the database must follow all defined rules (constraints, schemas, foreign keys). It moves the database from one valid state to another.
 
-## Compile and run the project
+SQL Example: You have a UNIQUE constraint on email. If you try to insert a duplicate email, the database rejects it and throws an error.
 
-```bash
-# development
-$ npm run start
+MongoDB Example: You defined @Prop({ required: true, unique: true }) on the email field in your Mongoose schema. If you try to save a user without an email or with a duplicate email, MongoDB rejects the save operation. The database remains consistent.
 
-# watch mode
-$ npm run start:dev
+3. Isolation (No Interference)
+What it means: If two users are doing transactions at the same time, they should not see each other's uncommitted data. It prevents "dirty reads."
 
-# production mode
-$ npm run start:prod
-```
+SQL Example: User A is buying the last ticket. User B is also trying to buy it. Isolation ensures they don't accidentally both get a ticket.
 
-## Run tests
+MongoDB Example: If User A is transferring points to User B, User B cannot query their balance and see the new points until User A's transaction is fully committed.
 
-```bash
-# unit tests
-$ npm run test
+4. Durability (It's Saved Forever)
+What it means: Once the database says "Success," the data is permanently saved, even if the server loses power a millisecond later.
 
-# e2e tests
-$ npm run test:e2e
+SQL Example: You get a COMMIT success message. The data is written to the hard drive.
 
-# test coverage
-$ npm run test:cov
-```
+MongoDB Example: When save() returns successfully, the data is written to the WiredTiger storage engine's journal log (Write-Ahead Log) on disk.
 
-## Deployment
+Part 2: Which Databases DON'T Follow ACID or Indexing Rules?
+It is important to know that every major database today supports ACID in some form, but they enforce it differently. There are two main database categories: Relational (SQL) and NoSQL.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+1. Are there databases that don't follow ACID?
+Yes, historically, many NoSQL databases (like early MongoDB, early Cassandra, DynamoDB) relaxed ACID for BASE (Basically Available, Soft state, Eventual consistency). They prioritized speed and availability over strict ACID.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+MongoDB (Pre-v4.0): Before version 4.0, MongoDB only had Atomicity at the single document level. Multi-document transactions were not supported. This was a major limitation (and still is in some edge cases).
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
+Cassandra: Uses "Eventual Consistency." If you write data, it might take a few milliseconds for all nodes in the cluster to see it. It does not guarantee immediate ACID isolation.
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+Redis: An in-memory database. It is very fast but its standard operations don't guarantee durability (if the server crashes before it saves to disk, data is lost).
 
-## Observability
+DynamoDB (AWS): By default, it's eventually consistent. You have to pay extra for "Strongly Consistent Reads."
 
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
+2. Which databases did NOT follow indexing rules? (And why?)
+The "indexing rule" refers to the fact that databases must use an index to quickly find a document (B-Tree, Hash, etc.) rather than scanning every row (a COLLSCAN).
 
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
+There are three main reasons a database would "ignore" an index:
 
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
+The Query Doesn't Match the Index: If you have an index on name, but query WHERE age = 25, the database is forced to scan the whole table. (This is true for both SQL and MongoDB).
 
-This project is already instrumented. To connect it, run this and approve the code it prints at [observe.nestjs.com/link](https://observe.nestjs.com/link) - signing up for free if you have no account:
+The Table is Too Small: If a collection only has 10 documents, scanning all 10 is faster than looking up the index. The database optimizer will ignore the index.
 
-```bash
-$ npx @nestjs/observe link
-```
+"Special" NoSQL Databases:
 
-It writes the app key and secret into `.env` and makes every `nest start` script (`start`, `start:dev`, `start:debug`) load it. In production, set `OBSERVE_APP_KEY` and `OBSERVE_APP_SECRET` in the environment instead.
+Redis: Does not use B-Tree indexes at all. It is a Key-Value store. You can only look up data by its exact key (like GET user:1000). If you want to find all users named "Himanshu", Redis has to scan everything unless you manually create a "Secondary Index" (like a Set or Sorted Set) yourself. Redis doesn't do it automatically.
 
-Or do it by hand: create an application and an API key at [observe.nestjs.com](https://observe.nestjs.com), and set the pair as `OBSERVE_APP_KEY` and `OBSERVE_APP_SECRET` in the environment the app runs in.
-
-The free plan needs no payment details and covers 300,000 events a month. You can also browse the [live demo](https://www.observe-demo.nestjs.com/dashboard) first - the whole dashboard over a busy service's data, with nothing to install.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observe](https://observe.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+HBase / Cassandra: These are designed for massive write throughput. They use LSM Trees (Log-Structured Merge Trees) rather than B-Trees. They rely heavily on the Primary Key (Partition Key). If you query on a non-partition key without an explicitly created secondary index, Cassandra will throw an error or perform a full cluster scan, which is extremely slow.
