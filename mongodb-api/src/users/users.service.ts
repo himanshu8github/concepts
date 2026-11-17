@@ -1,6 +1,7 @@
 import { Injectable, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import type { Connection } from 'mongoose';
 import { User, UserDocument } from '../default/schema/user.schema.js';
 import { PointHistory, PointHistoryDocument } from '../default/schema/point-history.schema.js';
 import { Order, OrderDocument } from '../default/schema/order.schema.js';
@@ -14,6 +15,7 @@ export class UsersService {
     @InjectModel(PointHistory.name) private pointHistoryModel: Model<PointHistoryDocument>,
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
     @InjectModel(Product.name) private productModel: Model<ProductDocument>,
+       @InjectConnection() private connection: Connection, 
   ) {}
 
   async createUser(data: any): Promise<User> {
@@ -29,6 +31,71 @@ export class UsersService {
       throw error;
     }
   }
+
+
+async buyFlashSaleItem(userId: string, productPrice: number) {
+  if (!Number.isFinite(productPrice) || productPrice <= 0) {
+    throw new BadRequestException('Invalid product price');
+  }
+
+  const session = await this.connection.startSession();
+
+  try {
+    let result;
+
+    await session.withTransaction(async () => {
+      // Atomic wallet deduction
+      const updatedUser = await this.userModel.findOneAndUpdate(
+        {
+          _id: new Types.ObjectId(userId),
+          walletPoints: { $gte: productPrice },
+        },
+        {
+          $inc: {
+            walletPoints: -productPrice,
+          },
+        },
+        {
+          new: true,
+          session,
+        },
+      );
+
+      if (!updatedUser) {
+        throw new BadRequestException(
+          'Insufficient points or User not found',
+        );
+      }
+
+      // Create order
+      const orderNumber = `ORD-FLASH-${Date.now()}`;
+
+      const [order] = await this.orderModel.create(
+        [
+          {
+            userId: updatedUser._id,
+            orderNumber,
+            productId: 'FLASH-SALE-ITEM',
+            pointsCost: productPrice,
+          },
+        ],
+        { session },
+      );
+
+      result = {
+        message: 'Success!',
+        newBalance: updatedUser.walletPoints,
+        orderNumber: order.orderNumber,
+      };
+    });
+
+    return result;
+
+  } finally {
+    await session.endSession();
+  }
+}
+
 
     async seedProducts(productsData: { name: string; price: number }[]) {
     if (!productsData || productsData.length === 0) {

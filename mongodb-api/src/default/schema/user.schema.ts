@@ -4,7 +4,7 @@ import { HydratedDocument } from 'mongoose';
 
 export type UserDocument = HydratedDocument<User>;
 
-@Schema({ timestamps: true })
+@Schema({ timestamps: true, versionKey: '__v'  })
 export class User {
   @Prop({
     required: true,
@@ -36,6 +36,9 @@ export class User {
     required: true,
   })
   password: string;
+
+    @Prop()
+  __v: number; 
 
   @Prop({
     type: Number,

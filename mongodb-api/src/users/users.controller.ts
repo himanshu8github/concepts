@@ -15,6 +15,14 @@ export class UsersController {
     return this.usersService.testIndex();
   }
 
+    @Post(':userId/flash-sale')
+  async flashSale(
+    @Param('userId') userId: string,
+    @Body('price') price: number,
+  ) {
+    return this.usersService.buyFlashSaleItem(userId, price);
+  }
+
   @Post('seed-products')
   async seedProducts(@Body() products: { name: string; price: number }[]) {
     return this.usersService.seedProducts(products);
