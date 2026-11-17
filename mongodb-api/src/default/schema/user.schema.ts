@@ -28,6 +28,18 @@ export class User {
     index: true,
   })
   mobile: string;
+
+  @Prop({
+    required: true,
+  })
+  password: string;
+
+  @Prop({
+    type: Number,
+    min: 0,
+    required: false,
+  })
+  age?: number;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
